@@ -1,0 +1,132 @@
+---
+
+- hosts: 'webserver'
+  tasks:
+    - name: 'Update apt repo and cache'
+      apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
+      become: true
+    - name: 'Install nginx'
+      apt: 
+        name: 'nginx'
+        state: 'present'   
+        update_cache: true
+      become: true
+    - name: 'Install mariadb-server'
+      apt:
+        name: 
+          - 'mariadb-server'
+          - 'mariadb-client'
+          - 'php-fpm'
+          - 'php-mysql'
+          - 'python3-pip'
+      become: true
+# create root .my.cnf config file
+#    - name: Add .my.cnf
+#      template: src=/home/elush/ansible/templates/my.cnf.j2 dest=/home/ansible/.my.cnf mode=0600
+#      become: true 
+# Set root password
+# UPDATE mysql.user SET Password=PASSWORD('mysecret') WHERE User='root';
+# FLUSH PRIVILEGES;
+
+      #    - name: Set root Password
+      #      mysql_user: login_password={{ mysql_root_password }} check_implicit_admin=yes name=root host=localhost password={{ mysql_root_password }} state=present
+      #with_items:
+      #  - localhost
+      #  - 127.0.0.1
+      #  - ::1
+      #      become: true
+    - name: Reload privilege tables
+      command: 'mysql -ne "{{ item }}"'
+      with_items:
+      - FLUSH PRIVILEGES
+      changed_when: False
+      become: true
+    - name: Remove anonymous users
+      command: 'mysql -ne "{{ item }}"'
+      with_items:
+      - DELETE FROM mysql.user WHERE User=''
+      changed_when: False
+      become: true
+
+    - name: Disallow root login remotely
+      command: 'mysql -ne "{{ item }}"'
+      with_items:
+      - DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1')
+      changed_when: False
+      become: true
+
+    - name: Remove test database and access to it
+      command: 'mysql -ne "{{ item }}"'
+      with_items:
+       - DROP DATABASE IF EXISTS test
+       - DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%'
+      changed_when: False
+      become: true
+
+    - name: Reload privilege tables
+      command: 'mysql -ne "{{ item }}"'
+      with_items:
+      - FLUSH PRIVILEGES
+      changed_when: False
+      become: true  
+    - name: Create a new database with name 'wordpress_db'
+      mysql_db:
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        name: wordpress_db
+        state: present
+      become: true  
+    - name: Create user with password, all database privileges and 'WITH GRANT OPTION' in wordpress_db
+      community.mysql.mysql_user:
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        state: present
+        name: wordpress_user
+        password: 513105
+        priv:
+          'wordpress_db.*': 'ALL,GRANT'
+      become: true
+    - name: Reload privilege tables
+      command: 'mysql -ne "{{ item }}"'
+      with_items:
+        - FLUSH PRIVILEGES
+      changed_when: False
+      become: true
+
+    - name: copy nginx config file
+      copy: src=/home/elush/ansible/nginx.conf dest=/etc/nginx/sites-available/wordpress
+      become: true
+    - name: enable configuration
+      file: >
+        dest=/etc/nginx/sites-enabled/wordpress
+        src=/etc/nginx/sites-available/wordpress
+        state=link
+      become: true  
+    - name: Delete default file
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      become: true  
+      #    - name: copy index.html
+      #     template: src=templates/index.html.j2 dest=/usr/share/nginx/html/index.html
+      #      mode=0644
+    - name: restart nginx
+      service: name=nginx state=restarted
+      become: true
+    - name: 'Download and install wp'
+      get_url:
+        url: https://wordpress.org/latest.tar.gz
+        dest: /tmp/wordpress.tar.gz 
+        # mode: '0440'
+      become: true
+    - name: Extract wordpress.tar.gz into /var/www
+      ansible.builtin.unarchive:
+         src: /tmp/wordpress.tar.gz
+         dest: /var/www
+         remote_src: yes
+      become: true  
+    - name: Change file ownership, group and permissions
+      ansible.builtin.file:
+        path: /var/www/wordpress
+        owner: www-data
+        group: www-data
+         #    mode: '0644'
+      become: true
